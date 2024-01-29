@@ -1,4 +1,3 @@
-import pickle
 import numpy as np
 
 import os
@@ -7,28 +6,69 @@ import subprocess
 import re
 import string
 from itertools import product
-from tqdm import tqdm
 import tempfile 
 
-from utils import *
+from spatialDSSAT.utils import *
+from DSSATTools import __file__ as dsssattools_module_path
+from DSSATTools import VERSION
+from DSSATTools.crop import CROP_CODES, CROPS_MODULES
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import random
 
 import warnings
 warnings.filterwarnings(action='ignore')
 
 TMP =  tempfile.gettempdir()
+# String squence to name weather files (AA, AB, AC, ..., XZ, YZ, ZZ)
 WTH_IDS = ["".join(i) for i in product(string.ascii_uppercase, string.ascii_uppercase)]
 
-# RUN_PATH = f"/tmp/dssatrun"
-# if not os.path.exists(RUN_PATH):
-#     os.mkdir(RUN_PATH)
+DSSAT_STATIC = os.path.join(os.path.dirname(dsssattools_module_path), "static")
+DSSAT_BIN = os.path.join(
+    os.path.dirname(dsssattools_module_path), "static", "bin", "dscsm048"
+)
+DSSAT_HOME = os.path.join(TMP, f"DSSAT{VERSION}/")
+BIN_NAME = f"dscsm{VERSION}"
+CONFILE = f'DSSATPRO.L{VERSION[1:]}'
 
-HOME = "~"
-# DSSAT_HOME = "/home/dquintero/DSSAT48/"
-# DSSAT_BIN = "/home/dquintero/dssat-csm-os/build/bin/dscsm048"
-COUNTRY = "Kenya"
+# Creates a folder with DSSAT files. This is done to avoid long path names that 
+# exceed the defined lenght for path variables in DSSAT.
+if not os.path.exists(DSSAT_HOME):
+    os.mkdir(DSSAT_HOME)
+for file in os.listdir(DSSAT_STATIC):
+    file_link = os.path.join(DSSAT_HOME, file)
+    if os.path.exists(file_link):
+        os.remove(file_link)
+    os.symlink(os.path.join(DSSAT_STATIC, file), file_link)
+
+CUSTOM_DSSAT_OPTIONS = {
+
+}
+
+def write_control_file(run_path, crop_name):
+    """
+    Writes DSSAT control file in the specified directory.
+
+    Arguments
+    ----------
+    run_path: str
+        Path to the directory where the model will run
+    crop_code: str
+        Crop name
+    """
+    crop_code = CROP_CODES[crop_name]
+    smodel = CROPS_MODULES[crop_name]
+    wth_path = "Weather"
+    with open(os.path.join(run_path, CONFILE), 'w') as f:
+        f.write(f'WED    {wth_path}\n')
+        if crop_code in ["WH", "BA"]:
+            f.write(f'M{crop_code}    {run_path} dscsm048 CSCER{VERSION}\n')
+        else:
+            f.write(f'M{crop_code}    {DSSAT_HOME} dscsm048 {smodel}{VERSION}\n')
+        f.write(f'CRD    {os.path.join(DSSAT_HOME, "Genotype")}\n')
+        f.write(f'PSD    {os.path.join(DSSAT_HOME, "Pest")}\n')
+        f.write(f'SLD    {os.path.join(DSSAT_HOME, "Soil")}\n')
+        f.write(f'STD    {os.path.join(DSSAT_HOME, "StandardData")}\n')
 
 
 class GSRun():
@@ -41,28 +81,26 @@ class GSRun():
     for the different locations. See: https://dssat.net/wp-content/uploads/2011/10/DSSAT-vol4.pdf
     for further details.
     '''
-    def __init__(self, dssat_home=None, dssat_bin=None):
+    def __init__(self, crop_name="Maize"):
         '''
         Instantiate the GSRun class
 
         Arguments
         ----------
-        dssat_home: str
-            Path to the folder with the files DSSAT needs. Those files include 
-            .CDE, .CTR, .L48 files, and Genotype, Pest, and StandardData. If not
-            provided it is taken from DSSATTools path.
-        dssat_bin: str
-            Path to the DSSAT executable file. If not provided it is taken from
-            the DSSATTools path.
+        crop_name: str
+            Name of the crop. Default value is Maize
         '''
-        self.__DSSAT_BIN = dssat_bin
-        self.__DSSAT_HOME = dssat_home
+        self._crop_name = crop_name.title()
+        assert self._crop_name in CROP_CODES.keys(), \
+            f'{self._crop_name} is not a valid crop'
+        
 
         self.RUN_PATH = os.path.join(
             TMP, "dssatrun"+''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
         )
         if not os.path.exists(self.RUN_PATH):
             os.mkdir(self.RUN_PATH)      
+        
         self.weather = []
         self.soil = []
         self.field = []
@@ -87,18 +125,33 @@ class GSRun():
         "$BATCH(SPATIAL)\n" + \
         "!\n" + \
         f"! Directory    : {self.RUN_PATH}\n" + \
-        f'! Command Line : {self.__DSSAT_BIN} S DSSBatch.v48\n' + \
+        f'! Command Line : {BIN_NAME} S DSSBatch.v48\n' + \
         f"! Crop         : Spatial\n" + \
         f"! Experiment   : EXPEFILE.MZX\n" + \
         f"! ExpNo        : 1\n" + \
-        f'! Debug        : {self.__DSSAT_BIN} " S DSSBatch.v48"\n' + \
+        f'! Debug        : {BIN_NAME} " S DSSBatch.v48"\n' + \
         "!\n" + \
         "@FILEX                                                                                        TRTNO     RP     SQ     OP     CO\n"
         
-    def add_treatment(self, soil:tuple, weather:tuple, nitrogen:int, 
+    def add_treatment(self, soil:str, weather:str, nitrogen:int, 
                       planting:datetime, cultivar:str):
         """
-        It adds a treatment for the current run.
+        It adds a treatment (location) for the current run. It adds one treatment at a time.
+
+        Arguments
+        ----------
+        soil: str 
+            Path to a .SOL file. That file must contain only one soil profile.
+        weather: str
+            Path to a .WTH file. 
+        nitrogen: list of tuples [(int, float), ...]
+            A list of tuples where each tuple is one Nitrogen application. The 
+            tuple contains two values, where the first one indicates the application
+            time (days after planting) and the second one the nitrogen rate (kg/ha).
+        planting: datetime
+            Planting date
+        cultivar: str
+            Cultivar code. It must be available on the DSSAT list of cultivars.
         """
         if weather not in self.weather:
             self.weather.append(weather)
@@ -168,10 +221,8 @@ class GSRun():
         """
         for n, (_, field_n, _, _) in enumerate(self.treatments, 1):
             soil_n = self.field[field_n-1][1]
-            soil = self.soil[soil_n-1]
-            soil_profile = f"IB000000{soil_n:-02}"
-            soil_filename = f"{soil[0]:07.2f}_{soil[1]:07.2f}".replace(".", "p")+".SOL"
-            with open(f"{HOME}/data/soil_data/dssat_soils/{soil_filename}", "r") as f:
+            soil_path = self.soil[soil_n-1]
+            with open(soil_path, "r") as f:
                 soil_lines = f.readlines()
 
             fieldCap = []
@@ -186,13 +237,6 @@ class GSRun():
             "@C  ICBL  SH2O  SNH4  SNO3"
             " 4    30  .107    .2    .7"
 
-            # management.initial_conditions["table"] = TabularSubsection(pd.DataFrame(
-            #     fieldCap,
-            #     columns=['ICBL', 'SH2O', 'SNH4', 'SNO3'])
-            # )
-            # management.field['SLDP'] = fieldCap[:,0].max()
-            # management.field["...........XCRD"] = soil[0]
-            # management.field["...........YCRD"] = soil[1]
     
     def _planting_build(self):
         self.gsx_str += \
@@ -244,36 +288,48 @@ class GSRun():
         "@N HARVEST     HFRST HLAST HPCNP HPCNR\n" + \
         " 1 HA              0 81365   100     0\n"
 
-    def run(self):
+    def run(self, **kwargs) -> pd.DataFrame:
+        """
+        Run DSSAT in spatial mode. It returns a dataframe with the simulation
+        reults. No arguments are required, some are optional tough.
+
+        Arguments
+        ----------
+        start_date: datetime
+            Start date for all treatments. If not provided the earliest planting
+            date is taken.
+        latest_date: datetime
+            Latest date the simulation is expected to end. This parameter is used 
+            to avoid searching weather files that might not be available.
+        """
+        self.start_date = kwargs.get("start_date", self.start_date + timedelta(days=150))
+        latest_date = kwargs.get("latest_date", self.start_date + timedelta(days=150))
+        
         self._treatment_build()
         self._cultivar_build()
         self._field_build()
         self._planting_build()
         self._fertilizer_build()
         self._options_build()
-        # self._ic_build()
+        
+        write_control_file(self.RUN_PATH, self._crop_name)
 
-        for n, soil in enumerate(self.soil, 1):
-            soil_filename = f"{soil[0]:07.2f}_{soil[1]:07.2f}".replace(".", "p")+".SOL"
-            with open(f"{HOME}/data/soil_data/dssat_soils/{soil_filename}", "r") as f:
+        for n, soil_path in enumerate(self.soil, 1):
+            with open(soil_path, "r") as f:
                 soil_lines = f.readlines()
             soil_lines[0] = f"*IB000000{n:-02}" + soil_lines[0][11:]
             self.sol_str += "".join(soil_lines)
         with open(f"{self.RUN_PATH}/SOIL.SOL", 'w') as f:
             f.write(self.sol_str)
 
-        for n, weather in enumerate(self.weather, 1):
+        for n, weather_path in enumerate(self.weather, 1):
             wth_id = WTH_IDS[n-1]
-            for year in range(self.start_date.year-1, self.start_date.year+1):
+            for year in range(self.start_date.year, latest_date.year+1):
                 wthfile_path = f"{self.RUN_PATH}/SE{wth_id}{str(year)[2:]}01.WTH"
                 if os.path.exists(wthfile_path):
                     os.remove(wthfile_path)
-                wthfile = f"{weather[0]:07.2f}_{weather[1]:07.2f}_{str(year)[2:]}01".replace(".", "p")+".WTH"    
-                assert os.path.exists(f"{HOME}/data/weather_data/dssat_files/{COUNTRY}/{wthfile}")
-                os.symlink(
-                    f"{HOME}/data/weather_data/dssat_files/{COUNTRY}/{wthfile}",
-                    wthfile_path
-                )
+                assert os.path.exists(weather_path)
+                os.symlink(weather_path, wthfile_path)
 
         with open(f"{self.RUN_PATH}/EXPEFILE.MZX", 'w') as f:
             f.write(self.gsx_str)
@@ -281,10 +337,10 @@ class GSRun():
         with open(f"{self.RUN_PATH}/DSSBatch.v48", 'w') as f:
             f.write(self.batch_str)
 
-        exc_args = [f"{self.__DSSAT_BIN}", 'S', "DSSBatch.v48"]
+        exc_args = [f"{DSSAT_BIN}", 'S', "DSSBatch.v48"]
         excinfo = subprocess.run(exc_args, 
             cwd=self.RUN_PATH, capture_output=True, text=True,
-            env={"DSSAT_HOME": self.__DSSAT_HOME, }
+            env={"DSSAT_HOME": DSSAT_HOME, BIN_NAME: DSSAT_BIN}
         )
         out = re.sub(r'(\n{2,})|(\n$)', "", excinfo.stdout)
         out = re.sub(r'((RUN).+\n.+(t/ha)\n)', "", out)
@@ -294,52 +350,6 @@ class GSRun():
             columns="RUN  CR  TRT FLO MAT TOPWT HARWT  RAIN  TIRR   CET  PESW  TNUP  TNLF   TSON TSOC".split()
         )
         shutil.rmtree(self.RUN_PATH)
+        # After it runs the object is reinstantiated 
+        self.__init__(crop_name=self._crop_name)
         return df
-    
-
-if __name__ == "__main__":
-    planting_window = pd.date_range("2014-03-20", "2014-05-20") # Long rains planting
-
-    with open(f"data/pixels_counties.pkl", "rb") as f:
-        pixels = pickle.load(f)
-    cultivars = ["990001", "990002", "990003"]
-    PRODUCTIVE_COUNTIES = ['Trans Nzoia', 'Uasin Gishu', 'Bungoma', 'Kakamega', 'Narok', 'Nakuru',
-        'Nandi', 'Migori', 'Kisii', 'Kericho', 'Machakos', 'Elgeyo-Marakwet',
-        'Siaya', 'Homa Bay', 'Meru', 'Makueni', 'Kwale', 'West Pokot', 'Kilifi',
-        'Baringo', 'Nyamira', 'Busia', 'Muranga', 'Bomet', 'Kisumu']
-    # PRODUCTIVE_COUNTIES = ["Uasin Gishu"]
-    N = 99
-    df_runs = pd.DataFrame()
-    for year in range(2014, 2020):
-        for province, pix in tqdm(pixels.items()):
-            if province not in PRODUCTIVE_COUNTIES:
-                continue
-            soil_list = [tuple(pix[np.random.randint(len(pix))]) for _ in range(N)]
-            weather_list = [tuple(pix[np.random.randint(len(pix))]) for _ in range(N)]
-            nitrogen_list = [((0, 0), )]*N
-            planting_list = [
-                datetime(year, planting_window[i].month, planting_window[i].day)
-                for i in np.random.randint(len(planting_window), size=N)
-            ]
-            cultivars_list = [cultivars[np.random.randint(0, 3)] for _ in range(N)]
-
-            gsRun = GSRun()
-            for treat in zip(soil_list, weather_list, nitrogen_list, planting_list, cultivars_list):    
-                gsRun.add_treatment(*treat)
-            out = gsRun.run()
-            for file in os.listdir(gsRun.RUN_PATH):
-                if file[-3:] in ("WTH", "SOL"):
-                    os.remove(os.path.join(gsRun.RUN_PATH, file))
-            out["soil"] = soil_list 
-            out["weather"] = weather_list 
-            out["nitro"] = nitrogen_list 
-            out["planting"] = planting_list 
-            out["cultivars"] = cultivars_list
-            out["year"] = year
-            out["province"] = province
-
-            df_runs = pd.concat([df_runs, out], ignore_index=True)
-
-        # df_runs.to_csv("results_tmp.csv")
-    df_runs.to_csv("results.csv")
-    # df_runs.to_csv("results_debug.csv")
