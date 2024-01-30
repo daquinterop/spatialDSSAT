@@ -41,8 +41,11 @@ for file in os.listdir(DSSAT_STATIC):
         os.remove(file_link)
     os.symlink(os.path.join(DSSAT_STATIC, file), file_link)
 
-CUSTOM_DSSAT_OPTIONS = {
-
+DEFAULT_SIMULATION_OPTIONS = {
+    "WATER": "Y", "NITRO": "Y", "SYMBI": "N", "PHOSP": "N", "POTAS": "N",
+    "CO2": "D",
+    "LIGHT": "E", "EVAPO": "R", "INFIL": "S", "PHOTO": "C",  "MESOM": "P", 
+    "MESEV": "R", "MESOL": "2",
 }
 
 def write_control_file(run_path, crop_name):
@@ -90,16 +93,16 @@ class GSRun():
         crop_name: str
             Name of the crop. Default value is Maize
         '''
-        self._crop_name = crop_name.title()
-        assert self._crop_name in CROP_CODES.keys(), \
-            f'{self._crop_name} is not a valid crop'
-        
+        if not hasattr(self, "treatments"):
+            self._crop_name = crop_name.title()
+            assert self._crop_name in CROP_CODES.keys(), \
+                f'{self._crop_name} is not a valid crop'
 
-        self.RUN_PATH = os.path.join(
-            TMP, "dssatrun"+''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
-        )
-        if not os.path.exists(self.RUN_PATH):
-            os.mkdir(self.RUN_PATH)      
+            self.RUN_PATH = os.path.join(
+                TMP, "dssatrun"+''.join(random.choices(string.ascii_uppercase + string.digits, k=8))
+            )
+            if not os.path.exists(self.RUN_PATH):
+                os.mkdir(self.RUN_PATH)      
         
         self.weather = []
         self.soil = []
@@ -109,29 +112,9 @@ class GSRun():
         self.cultivar = []
         self.treatments = []
         self.start_date = datetime(9999, 9, 9)
-        self.sol_str = "*SOILS: the upper layer of earth in which plants grow\n\n"
-        self.gsx_str = \
-        "*EXP.DETAILS: FLSC8101GS SPATIAL ANALYSES TEST CASE; FLORENCE, SOUTH CAROLINA\n\n" +\
-        "*GENERAL\n" +\
-        "@PEOPLE\n" +\
-        "Diego\n" +\
-        "@ADDRESS\n" +\
-        "Huntsville, Alabama\n" +\
-        "@SITE\n" +\
-        "Site\n" +\
-        "@ PAREA  PRNO  PLEN  PLDR  PLSP  PLAY HAREA  HRNO  HLEN  HARM.........\n" +\
-        "    -99   -99   -99   -99   -99   -99   -99   -99   -99   -99\n\n"
-        self.batch_str = \
-        "$BATCH(SPATIAL)\n" + \
-        "!\n" + \
-        f"! Directory    : {self.RUN_PATH}\n" + \
-        f'! Command Line : {BIN_NAME} S DSSBatch.v48\n' + \
-        f"! Crop         : Spatial\n" + \
-        f"! Experiment   : EXPEFILE.MZX\n" + \
-        f"! ExpNo        : 1\n" + \
-        f'! Debug        : {BIN_NAME} " S DSSBatch.v48"\n' + \
-        "!\n" + \
-        "@FILEX                                                                                        TRTNO     RP     SQ     OP     CO\n"
+        self.sol_str = ""
+        self.gsx_str = ""
+        self.batch_str = ""
         
     def add_treatment(self, soil:str, weather:str, nitrogen:int, 
                       planting:datetime, cultivar:str):
@@ -153,6 +136,9 @@ class GSRun():
         cultivar: str
             Cultivar code. It must be available on the DSSAT list of cultivars.
         """
+
+        assert len(self.treatments) < 99, "99 is the maximum number of treatments"
+
         if weather not in self.weather:
             self.weather.append(weather)
         weather_n = self.weather.index(weather) + 1
@@ -181,6 +167,31 @@ class GSRun():
 
         self.treatments.append((cultivar_n, field_n, planting_n, nitrogen_n))
 
+    def _header_build(self):
+        self.sol_str = "*SOILS: the upper layer of earth in which plants grow\n\n"
+        self.gsx_str = \
+        "*EXP.DETAILS: FLSC8101GS SPATIAL ANALYSES TEST CASE; FLORENCE, SOUTH CAROLINA\n\n" +\
+        "*GENERAL\n" +\
+        "@PEOPLE\n" +\
+        "Diego\n" +\
+        "@ADDRESS\n" +\
+        "Huntsville, Alabama\n" +\
+        "@SITE\n" +\
+        "Site\n" +\
+        "@ PAREA  PRNO  PLEN  PLDR  PLSP  PLAY HAREA  HRNO  HLEN  HARM.........\n" +\
+        "    -99   -99   -99   -99   -99   -99   -99   -99   -99   -99\n\n"
+        self.batch_str = \
+        "$BATCH(SPATIAL)\n" + \
+        "!\n" + \
+        f"! Directory    : {self.RUN_PATH}\n" + \
+        f'! Command Line : {BIN_NAME} S DSSBatch.v48\n' + \
+        f"! Crop         : Spatial\n" + \
+        f"! Experiment   : EXPEFILE.{CROP_CODES[self._crop_name]}X\n" + \
+        f"! ExpNo        : 1\n" + \
+        f'! Debug        : {BIN_NAME} " S DSSBatch.v48"\n' + \
+        "!\n" + \
+        "@FILEX                                                                                        TRTNO     RP     SQ     OP     CO\n"
+
     def _treatment_build(self):
         self.gsx_str += \
         "*TREATMENTS                        -------------FACTOR LEVELS------------\n" +\
@@ -192,7 +203,7 @@ class GSRun():
                 n, n, cultivar_n, field_n, 0, planting_n, nitrogen_n
             ) # IC is 0, then default options are used (Field capacity, zero nitrogen)
             self.batch_str += \
-            f"{os.path.join(self.RUN_PATH, 'EXPEFILE.MZX'):<96} {n:-2}      1      0      0      0\n"
+            f"{os.path.join(self.RUN_PATH, f'EXPEFILE.{CROP_CODES[self._crop_name]}X'):<96} {n:-2}      1      0      0      0\n"
         self.gsx_str += "\n" 
 
     def _cultivar_build(self):
@@ -232,11 +243,6 @@ class GSRun():
             fieldCap = np.array(fieldCap).astype(float)
             fieldCap = np.hstack([fieldCap, np.ones(fieldCap.shape)*.01]) # Default value for initial NO3 and NH4
 
-            "@C   PCR ICDAT  ICRT  ICND  ICRN  ICRE  ICWD ICRES ICREN ICREP ICRIP ICRID ICNAME"
-            " 4    MZ 81089   200   -99     1     1   -99   -99   -99   -99   -99   -99 -99"
-            "@C  ICBL  SH2O  SNH4  SNO3"
-            " 4    30  .107    .2    .7"
-
     
     def _planting_build(self):
         self.gsx_str += \
@@ -261,7 +267,11 @@ class GSRun():
                 )
         self.gsx_str += "\n" 
 
-    def _options_build(self):
+    def _options_build(self, sim_controls):
+        options = [
+            sim_controls.get(key, DEFAULT_SIMULATION_OPTIONS[key]) 
+            for key in DEFAULT_SIMULATION_OPTIONS
+        ]
         self.gsx_str += \
         "*SIMULATION CONTROLS\n" + \
         "@N GENERAL     NYERS NREPS START SDATE RSEED SNAME.................... SMODEL\n" + \
@@ -269,9 +279,9 @@ class GSRun():
             self.start_date.strftime("%y%j")
         ) + \
         "@N OPTIONS     WATER NITRO SYMBI PHOSP POTAS DISES  CHEM  TILL   CO2\n" + \
-        " 1 OP              Y     Y     N     N     N     N     N     N     D\n" + \
-        "@N METHODS     WTHER INCON LIGHT EVAPO INFIL PHOTO HYDRO NSWIT MESOM MESEV MESOL\n" + \
-        " 1 ME              M     M     E     R     S     C     R     1     P     R     2\n" + \
+        " 1 OP              {0}     {1}     {2}     {3}     {4}     N     N     N     {5}\n".format(*options) + \
+        "@N METHODS     WTHER INCON LIGHT EVAPO INFIL PHOTO HYDRO MESOM MESEV MESOL\n" + \
+        " 1 ME              M     M     {6}     {7}     {8}     {9}     R     {10}     {11}     {12}\n".format(*options) + \
         "@N MANAGEMENT  PLANT IRRIG FERTI RESID HARVS\n" + \
         " 1 MA              R     N     D     N     M\n" + \
         "@N OUTPUTS     FNAME OVVEW SUMRY FROPT GROUT CAOUT WAOUT NIOUT MIOUT DIOUT VBOSE CHOUT OPOUT FMOPT\n" + \
@@ -301,16 +311,23 @@ class GSRun():
         latest_date: datetime
             Latest date the simulation is expected to end. This parameter is used 
             to avoid searching weather files that might not be available.
+        sim_controls: dict
+            Simulation control definitions. A dict defining some of the simulation
+            options. An example can be found in spatialDSSAT.run.DEFAULT_SIMULATION_OPTIONS
         """
+        assert len(self.treatments) > 0, \
+            "No treatments have been added. Use the add_treatment to add treatments" 
         self.start_date = kwargs.get("start_date", self.start_date + timedelta(days=150))
         latest_date = kwargs.get("latest_date", self.start_date + timedelta(days=150))
+        sim_controls = kwargs.get("sim_controls", DEFAULT_SIMULATION_OPTIONS)
         
+        self._header_build()
         self._treatment_build()
         self._cultivar_build()
         self._field_build()
         self._planting_build()
         self._fertilizer_build()
-        self._options_build()
+        self._options_build(sim_controls)
         
         write_control_file(self.RUN_PATH, self._crop_name)
 
@@ -349,7 +366,11 @@ class GSRun():
             [line.split() for line in out.split("\n")],
             columns="RUN  CR  TRT FLO MAT TOPWT HARWT  RAIN  TIRR   CET  PESW  TNUP  TNLF   TSON TSOC".split()
         )
-        shutil.rmtree(self.RUN_PATH)
-        # After it runs the object is reinstantiated 
-        self.__init__(crop_name=self._crop_name)
+        # shutil.rmtree(self.RUN_PATH)
         return df
+    
+    def clear(self):
+        """
+        Clear treatments to define new ones
+        """
+        self.__init__(crop_name=self._crop_name)
