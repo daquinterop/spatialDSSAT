@@ -116,7 +116,7 @@ class GSRun():
         self.gsx_str = ""
         self.batch_str = ""
         
-    def add_treatment(self, soil:str, weather:str, nitrogen:int, 
+    def add_treatment(self, soil:str, weather:str, nitrogen:list, 
                       planting:datetime, cultivar:str):
         """
         It adds a treatment (location) for the current run. It adds one treatment at a time.
