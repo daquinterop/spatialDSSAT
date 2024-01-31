@@ -2,20 +2,33 @@
 This contains a set of handful funcitons to run the simulations.
 """
 
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, Point
 from shapely.prepared import prep
 from math import ceil, floor
 import numpy as np
-import datetime
+from datetime import timedelta, datetime
 import pandas as pd
 
-from DSSATTools import Management, TabularSubsection
+import rasterio as rio
+from netCDF4 import Dataset
+
+from itertools import product
+from tqdm import tqdm
+import shutil
+
+from DSSATTools import Weather
 
 # Functions to get the pixels for the polygon
-def grid_bounds(geom, delta):
+def grid_bounds(geom, geotransform):
+    """
+    Given a defined geometry and a delta x, it returns a grid (series of polygons)
+    that includes all the geometry. Grid is defined according to the geotransform.
+    geotransform is defined as it's shown in https://gdal.org/tutorials/geotransforms_tut.html
+    """
+    delta = geotransform[1]
     minx, miny, maxx, maxy = geom.bounds
-    minx = floor(minx/delta)*delta-.05; miny = floor(miny/delta)*delta-.05
-    maxx = ceil(maxx/delta)*delta+.05; maxy = ceil(maxy/delta)*delta+.05
+    minx = floor(minx/delta)*delta-.5*delta; miny = floor(miny/delta)*delta-.5*delta
+    maxx = ceil(maxx/delta)*delta+.5*delta; maxy = ceil(maxy/delta)*delta+.5*delta
     nx = round((maxx - minx)/delta) 
     ny = round((maxy - miny)/delta)
     gx, gy = np.linspace(minx,maxx,nx+1), np.linspace(miny,maxy,ny+1)
@@ -26,122 +39,111 @@ def grid_bounds(geom, delta):
             grid.append( poly_ij )
     return grid
 
-def partition(geom, delta):
+def partition(geom, geotransform):
+    """"
+    It returns a the cells of a grid of delta size that touches that geometry.
+    """
     prepared_geom = prep(geom)
-    grid = list(filter(prepared_geom.intersects, grid_bounds(geom, delta)))
+    grid = list(filter(prepared_geom.intersects, grid_bounds(geom, geotransform)))
     return grid
 
 def cust_round(val):
-    if round(val, 1) == -0.:
+    val = round(val, 2)
+    if val == -0.:
         return 0.0
     else:
-        return round(val, 1)
+        return val
     
-def pixel_coords(geom, delta=.1):
+def pixel_coords(geom, geotransform):
     """
-    Returns the pixel centroids for the input geometry
+    Given a geom it retuns the centroid of the 
     """
-    grid = partition(geom, delta)
+    grid = partition(geom, geotransform)
     centroids = map(lambda p: p.centroid, grid)
-
     return list(map(lambda p: (cust_round(p.x), cust_round(p.y)), centroids))
 
-def init_management():
+VARIABLE_MAP_AGERA5 = {
+    'Wind_Speed_10m_Mean': "WIND", 'Dew_Point_Temperature_2m_Mean': "DEWP", 
+    'Temperature_Air_2m_Max_24h': "TMAX", 'Temperature_Air_2m_Min_24h': "TMIN", 
+    'Precipitation_Flux': 'RAIN', 'Solar_Radiation_Flux': "SRAD"
+}
+
+MINIMUM_VARIABLE_SET = ["TMAX", "TMIN", "SRAD", "RAIN"]
+TEMP_VARS = ["TMAX", "TMIN", "TDEW"]
+
+def weather_from_netcdf(
+        nc_file:str,  elev_file:str ,geom:Polygon, save_to:str, 
+        pars:dict=VARIABLE_MAP_AGERA5):
     """
-    Creates a management instance and returns it. 
+    Creates .WTH files for the pixels within a polygon from a AgERA5 netCDF file.
+
+    Arguments
+    ----------
+    nc_file: str
+        Path to the netCDF file.
+    elev_file: str
+        Path to elevation raster.
+    geom: shapely.Polygon
+        The polygon from which the data will be extracted.
+    save_to: str
+        Path to the folder where the .WTH will be saved. The folder must exist.
+    pars: dict
+        A dictionary mapping the netCDF file variables to DSSAT weather variables.
+        If not provided, the variable names from AgERA5 dataset is be used. For reference:
+        https://cds.climate.copernicus.eu/cdsapp#!/dataset/10.24381/cds.6c68c9bb?tab=overview
     """
-    management = Management(
-        planting_date = datetime.datetime(2021, 1, 1),
-    )
-    # Planting details from 
-    # https://fintracu.fintrac.com/sites/default/files/tech_manuals/Fintrac%20U_Maize%20Cultivation%20Manual.pdf
-    management.planting_details["PLRS"] = 90 # Row spacing
-    management.planting_details["PPOP"] = 4.4 # Plant population
-    management.planting_details["PPOE"] = 4 # Plant population at emergency
-    # Fertilizer details
-    management.simulation_controls["FERTI"] = "D" # Days after planting
-    management.fertilizers["table"]["FMCD"] = "FE005" # Urea
-    management.fertilizers["table"]["FACD"] = "AP002" # Broadcast, incorporated
-    management.fertilizers["table"]["FDEP"] = 5 # 5 cm depth
-    # Options
-    management.simulation_controls["WATER"] = "Y" 
-    management.simulation_controls["NITRO"] = "Y"
-    management.simulation_controls["EVAPO"] = "F" # FAO ET
-    management.simulation_controls["CO2"] = "D" # Default 380ppm
-    management.simulation_controls["PHOTO"] = "C" # Canopy curve (daily) photosynthesis
-    management.simulation_controls["MESEV"] = "R" # Ritchie-Ceres soil evaporation method
-    management.simulation_controls["OVVEW"] = "N"
-    management.simulation_controls["SUMRY"] = "N"
-    management.simulation_controls["GROUT"] = "N"
-    management.simulation_controls["CAOUT"] = "N"
-    management.simulation_controls["WAOUT"] = "N"
-    management.simulation_controls["NIOUT"] = "N"
-
-    # Crop
-    management._Management__cultivars["CR"] = "MZ"
-    management.initial_conditions['PCR'] = "MZ"
-    # Soil and Weather Station
-    management.field["WSTA...."] = "WSTA"
-    management.field["ID_SOIL"] = "ZW00000001"
-
-    management.simulation_controls['SMODEL'] = "MZCER"
-    return management
-
-
-def management_ic(management, soil, country="Zimbabwe"):
-    """
-    Modify initial conditions in Management instance. soil the pixel coords (lon, lat).
-    Set soil moisture to field capacity.
-    """
-    HOME = "/home/dquintero/dssat_service"
-    soil_filename = f"{soil[0]:07.2f}_{soil[1]:07.2f}".replace(".", "p")+".SOL"
-    with open(f"{HOME}/data/soil_data/dssat_soils/{soil_filename}", "r") as f:
-        soil_lines = f.readlines()
-
-    fieldCap = []
-    for layer_line in soil_lines[6:]:
-        if len(layer_line) > 2:
-            fieldCap.append((layer_line[:6], layer_line[19:24]))
-    fieldCap = np.array(fieldCap).astype(float)
-    fieldCap = np.hstack([fieldCap, np.ones(fieldCap.shape)*.01]) # Default value for initial NO3 and NH4
-
-    management.initial_conditions["table"] = TabularSubsection(pd.DataFrame(
-        fieldCap,
-        columns=['ICBL', 'SH2O', 'SNH4', 'SNO3'])
-    )
-    management.field['SLDP'] = fieldCap[:,0].max()
-    management.field["...........XCRD"] = soil[0]
-    management.field["...........YCRD"] = soil[1]
-    return management
-
-def management_dates(management, pdate, dap=0):
-    """
-    Modify all dates in management file. Basically sets IC, fertilizer and start date
-    equal to planting date. 
-    """
-    management.planting_details["PDATE"] = pdate.strftime("%y%j")
-    management.planting_details["EDATE"] = (pdate + datetime.timedelta(days=5)).strftime("%y%j")
-    management.initial_conditions['ICDAT'] = pdate.strftime("%y%j") 
-    # management.fertilizers["table"]["FDATE"] = (pdate + datetime.timedelta(days=dap)).strftime("%y%j") # 20 Days after planting
-    management.simulation_controls['SDATE'] = pdate.strftime("%y%j")
-    management.field["WSTA...."] = f"WSTA{str(pdate.year)[2:]}01"
-    return management
-
-def management_nitro(management, nitro):
-    """
-    Modifies nitrogen amount in the management instance
+    assert all(map(lambda x: x in pars.values(), MINIMUM_VARIABLE_SET)), \
+        f"netCDF file must contain at least {', '.join(MINIMUM_VARIABLE_SET)}"
     
-        nitro : tuple (dap, rate)
-    """
-    management.fertilizers["table"] = pd.concat([management.fertilizers["table"]]*len(nitro), ignore_index=True)
-    for n, (dap, rate) in enumerate(nitro):
-        management.fertilizers["table"].loc[n, "FDATE"] = dap
-        management.fertilizers["table"].loc[n, "FAMN"] = rate
-    return management
+    elev = rio.open(elev_file)
 
-def management_cult(management, cult):
-    """
-    Modifies cultivar in the management instance
-    """
-    management._Management__cultivars["INGENO"] = cult
-    return management
+    ds = Dataset(nc_file)
+    for varname in pars.keys():
+        assert varname in ds.variables.keys(), \
+            f"Variable '{varname}' not in netCDF file"
+
+    time = [datetime(1900, 1, 1) + timedelta(days=i) for i in ds.variables["time"][:]]
+
+    x = ds.variables["lon"][:]
+    y = ds.variables["lat"][:]
+
+    # Buffer ensures that at least one pixel will be selected
+    geom = geom.buffer(np.float32(x[1] - x[0])*.5)
+
+    all_data = np.array([
+        ds.variables[var][:] for var in pars.keys()
+    ]) # dimensions: variable, time, lat, lon
+
+    generator_list = zip(product(range(len(y)), range(len(x))), product(y, x))
+    generator_list = list(filter(lambda x: geom.contains(Point(x[1][::-1])), generator_list))
+
+    elev_list = list(elev.sample(list(map(lambda x: x[1][::-1], generator_list))))
+    elev_list = list(map(int, elev_list))
+    n = 0
+    for (j, i), (lat, lon) in tqdm(generator_list):
+        lat = cust_round(lat)
+        lon = cust_round(lon)
+
+        df = pd.DataFrame(
+            all_data[:, :, j, i].T, columns=pars.keys(),
+            index=time
+        )
+        df = df.rename(columns=pars)
+        if df.RAIN.mean() < 0: # Maybe no records in the sea
+            continue
+        # Some have TMIN slightly higher than TMAX
+        df["TMAX"] = np.where(df["TMAX"] > df["TMIN"], df["TMAX"], df["TMIN"] +.1)
+        for var in filter(lambda x: x in df.columns, TEMP_VARS):
+            df[var] -= 273.15
+        df["SRAD"] /= 1e6
+        assert df.SRAD.min() > 0
+        df["RAIN"] = df["RAIN"].abs()
+        wth = Weather(
+            df=df, pars=dict(zip(df.columns, df.columns)), 
+            lat=lat, lon=lon, elev=elev_list[n]
+        )
+        wth.REFHT = 2
+        wth.WNDHT = 10
+        wth._name = f"{lon:07.2f}_{lat:07.2f}_{wth._name[4:]}".replace(".", "p")
+        wth.write(save_to)
+        n+=1

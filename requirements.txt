@@ -1,5 +1,8 @@
 shapely
 numpy
-# DSSATTools
+DSSATTools
 pandas
 tqdm
+rasterio
+netCDF4
+geopandas
