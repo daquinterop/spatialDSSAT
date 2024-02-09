@@ -67,13 +67,18 @@ VARIABLE_MAP_AGERA5 = {
     'Temperature_Air_2m_Max_24h': "TMAX", 'Temperature_Air_2m_Min_24h': "TMIN", 
     'Precipitation_Flux': 'RAIN', 'Solar_Radiation_Flux': "SRAD"
 }
+VARIABLE_TRANS_AGERA5 = {
+    "TMAX": lambda x: x - 273.15, "TMIN": lambda x: x - 273.15,
+    "TDEW": lambda x: x - 273.15, "SRAD": lambda x: x/1e6,
+    "RAIN": lambda x: x, "WIND": lambda x: x
+}
 
 MINIMUM_VARIABLE_SET = ["TMAX", "TMIN", "SRAD", "RAIN"]
 TEMP_VARS = ["TMAX", "TMIN", "TDEW"]
 
 def weather_from_netcdf(
-        nc_file:str,  elev_file:str ,geom:Polygon, save_to:str, 
-        pars:dict=VARIABLE_MAP_AGERA5):
+        nc_file:str,  elev:str|float ,geom:Polygon, save_to:str, 
+        pars:dict=VARIABLE_MAP_AGERA5, trans:dict=VARIABLE_TRANS_AGERA5):
     """
     Creates .WTH files for the pixels within a polygon from a AgERA5 netCDF file.
 
@@ -81,8 +86,8 @@ def weather_from_netcdf(
     ----------
     nc_file: str
         Path to the netCDF file.
-    elev_file: str
-        Path to elevation raster.
+    elev: str ot float
+        Path to elevation raster or constant elevation valued to assume.
     geom: shapely.Polygon
         The polygon from which the data will be extracted.
     save_to: str
@@ -91,12 +96,16 @@ def weather_from_netcdf(
         A dictionary mapping the netCDF file variables to DSSAT weather variables.
         If not provided, the variable names from AgERA5 dataset is be used. For reference:
         https://cds.climate.copernicus.eu/cdsapp#!/dataset/10.24381/cds.6c68c9bb?tab=overview
+    trans: dict
+        A dictionary mapping each DSSAT weather variable to a function that transform
+        the units of netcdf variable to the units required by DSSAT. For example, 
+        if temperature is in Kelvin in the netcdf, then a function that transform 
+        from Kelvin to Celsius would be needed. If not provided then AgERA5 is assumed 
+        and default transformations are used.
     """
     assert all(map(lambda x: x in pars.values(), MINIMUM_VARIABLE_SET)), \
         f"netCDF file must contain at least {', '.join(MINIMUM_VARIABLE_SET)}"
     
-    elev = rio.open(elev_file)
-
     ds = Dataset(nc_file)
     for varname in pars.keys():
         assert varname in ds.variables.keys(), \
@@ -116,9 +125,13 @@ def weather_from_netcdf(
 
     generator_list = zip(product(range(len(y)), range(len(x))), product(y, x))
     generator_list = list(filter(lambda x: geom.contains(Point(x[1][::-1])), generator_list))
-
-    elev_list = list(elev.sample(list(map(lambda x: x[1][::-1], generator_list))))
-    elev_list = list(map(int, elev_list))
+    
+    if isinstance(elev, str):
+        elev = rio.open(elev)
+        elev_list = list(elev.sample(list(map(lambda x: x[1][::-1], generator_list))))
+        elev_list = list(map(int, elev_list))
+    else:
+        elev_list = [elev]*len(generator_list)
     n = 0
     for (j, i), (lat, lon) in tqdm(generator_list):
         lat = cust_round(lat)
@@ -133,9 +146,9 @@ def weather_from_netcdf(
             continue
         # Some have TMIN slightly higher than TMAX
         df["TMAX"] = np.where(df["TMAX"] > df["TMIN"], df["TMAX"], df["TMIN"] +.1)
-        for var in filter(lambda x: x in df.columns, TEMP_VARS):
-            df[var] -= 273.15
-        df["SRAD"] /= 1e6
+        # Apply transformations
+        for var in df.columns:
+            df[var] = df[var].map(trans[var])
         assert df.SRAD.min() > 0
         df["RAIN"] = df["RAIN"].abs()
         wth = Weather(

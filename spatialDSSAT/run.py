@@ -106,6 +106,7 @@ class GSRun():
         
         self.weather = []
         self.soil = []
+        self.soil_profile = []
         self.field = []
         self.planting = []
         self.nitrogen = []
@@ -116,8 +117,8 @@ class GSRun():
         self.gsx_str = ""
         self.batch_str = ""
         
-    def add_treatment(self, soil:str, weather:str, nitrogen:list, 
-                      planting:datetime, cultivar:str):
+    def add_treatment(self, weather:str, nitrogen:list, planting:datetime,
+                      cultivar:str, soil:str=None, **kwargs):
         """
         It adds a treatment (location) for the current run. It adds one treatment at a time.
 
@@ -125,6 +126,7 @@ class GSRun():
         ----------
         soil: str 
             Path to a .SOL file. That file must contain only one soil profile.
+            Soil profile string can also be passed using the soil_profile argument.
         weather: str
             Path to a .WTH file. 
         nitrogen: list of tuples [(int, float), ...]
@@ -139,13 +141,21 @@ class GSRun():
 
         assert len(self.treatments) < 99, "99 is the maximum number of treatments"
 
+        soil_profile = kwargs.get("soil_profile", True)
         if weather not in self.weather:
             self.weather.append(weather)
         weather_n = self.weather.index(weather) + 1
 
-        if soil not in self.soil:
-            self.soil.append(soil)
-        soil_n = self.soil.index(soil) + 1
+        # One can pass either soil_profile string, or soil profile file.
+        if soil_profile:
+            if soil_profile not in self.soil_profile:
+                self.soil_profile.append(soil_profile)
+            soil_n = self.soil_profile.index(soil_profile) + 1
+        else:
+            assert soil is not None, "You must pass either soil or soil_profile"
+            if soil not in self.soil:
+                self.soil.append(soil)
+            soil_n = self.soil.index(soil) + 1
 
         field = (weather_n, soil_n)
         if field not in self.field:
@@ -330,12 +340,17 @@ class GSRun():
         self._options_build(sim_controls)
         
         write_control_file(self.RUN_PATH, self._crop_name)
-
-        for n, soil_path in enumerate(self.soil, 1):
-            with open(soil_path, "r") as f:
-                soil_lines = f.readlines()
-            soil_lines[0] = f"*IB000000{n:-02}" + soil_lines[0][11:]
-            self.sol_str += "".join(soil_lines)
+        if len(self.soil_profile) > 0:
+            for n, soil_lines in enumerate(self.soil_profile, 1):
+                soil_lines = soil_lines.split("\n")
+                soil_lines[0] = f"*IB000000{n:-02}" + soil_lines[0][11:]
+                self.sol_str += "\n".join(soil_lines)
+        else: 
+            for n, soil_path in enumerate(self.soil, 1):
+                with open(soil_path, "r") as f:
+                    soil_lines = f.readlines()
+                soil_lines[0] = f"*IB000000{n:-02}" + soil_lines[0][11:]
+                self.sol_str += "".join(soil_lines)
         with open(f"{self.RUN_PATH}/SOIL.SOL", 'w') as f:
             f.write(self.sol_str)
 
