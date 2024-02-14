@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 
 import os
 import shutil
@@ -13,7 +14,7 @@ from DSSATTools import __file__ as dsssattools_module_path
 from DSSATTools import VERSION
 from DSSATTools.crop import CROP_CODES, CROPS_MODULES
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import random
 
 import warnings
@@ -46,6 +47,11 @@ DEFAULT_SIMULATION_OPTIONS = {
     "CO2": "D",
     "LIGHT": "E", "EVAPO": "R", "INFIL": "S", "PHOTO": "C",  "MESOM": "P", 
     "MESEV": "R", "MESOL": "2",
+}
+DEFAULT_PLANTING_OPTIONS = {
+    "PDATE": -99, "EDATE": -99, "PPOP": 4.0, "PPOE": 4.0, "PLME": "S",
+    "PLDS": "R", "PLRS": 90, "PLRD": 0, "PLDP": 4, "PLWT": -99,
+    "PAGE": -99, "PENV": -99, "PLPH": -99, "SPRL": -99
 }
 
 def write_control_file(run_path, crop_name):
@@ -112,10 +118,13 @@ class GSRun():
         self.nitrogen = []
         self.cultivar = []
         self.treatments = []
+        self.overview = None # This will save the overview file
+        self.summary = None # This will save the summary file
         self.start_date = datetime(9999, 9, 9)
         self.sol_str = ""
         self.gsx_str = ""
         self.batch_str = ""
+        
         
     def add_treatment(self, weather:str, nitrogen:list, planting:datetime,
                       cultivar:str, soil:str=None, **kwargs):
@@ -141,7 +150,7 @@ class GSRun():
 
         assert len(self.treatments) < 99, "99 is the maximum number of treatments"
 
-        soil_profile = kwargs.get("soil_profile", True)
+        soil_profile = kwargs.get("soil_profile", False)
         if weather not in self.weather:
             self.weather.append(weather)
         weather_n = self.weather.index(weather) + 1
@@ -169,11 +178,17 @@ class GSRun():
         if cultivar not in self.cultivar:
             self.cultivar.append(cultivar)
         cultivar_n = self.cultivar.index(cultivar) + 1
-
+        
         if planting not in self.planting:
             self.planting.append(planting)
         planting_n = self.planting.index(planting) + 1
-        self.start_date = min(self.start_date, planting)
+        if isinstance(planting, (datetime, date)):
+            self.start_date = min(self.start_date, planting)
+        elif isinstance(planting, dict):
+            assert "PDATE" in planting
+            self.start_date = min(self.start_date, planting["PDATE"])
+        else:
+            raise "Planting must be a datetime or dict with planting parameters"
 
         self.treatments.append((cultivar_n, field_n, planting_n, nitrogen_n))
 
@@ -222,7 +237,7 @@ class GSRun():
         "@C CR INGENO CNAME\n"
         for n, cul in enumerate(self.cultivar, 1):
             self.gsx_str += \
-            "{:-2} MZ {:>6} {:<8}\n".format(n, cul, cul)
+            "{:-2} {:>2} {:>6} {:<8}\n".format(n, CROP_CODES[self._crop_name], cul, cul)
         self.gsx_str += "\n" 
 
     def _field_build(self):
@@ -259,10 +274,19 @@ class GSRun():
         "*PLANTING DETAILS\n" + \
         "@P PDATE EDATE  PPOP  PPOE  PLME  PLDS  PLRS  PLRD  PLDP  PLWT  PAGE  PENV  PLPH  SPRL                        PLNAME\n"
         for n, planting in enumerate(self.planting, 1):
+            if isinstance(planting, (datetime, date)):
+                planting = {"PDATE": planting}
+            planting["PDATE"] = planting["PDATE"].strftime("%y%j")
+            if "EDATE" in planting:
+                assert isinstance(planting["EDATE"], (date, datetime))
+                planting["EDATE"] = planting["EDATE"].strftime("%y%j")
+            options = [
+                planting.get(key, DEFAULT_PLANTING_OPTIONS[key]) 
+                for key in DEFAULT_PLANTING_OPTIONS
+            ]
+            options = [n] + options
             self.gsx_str += \
-            "{0:-2} {1:<5}   -99   4.0   4.0     S     R    90     0     4   -99   -99   -99   -99   -99                        -99\n". format(
-                n, planting.strftime("%y%j")
-            ) 
+            "{:-2} {:>5} {:>5} {:>5.1f} {:>5.1f} {:>5} {:>5} {:>5.0f} {:>5.0f} {:>5.0f} {:>5.0f} {:>5.0f} {:>5.0f} {:>5.0f} {:>5.0f}                        -99\n". format(*options)
         self.gsx_str += "\n" 
 
     def _fertilizer_build(self):
@@ -295,7 +319,7 @@ class GSRun():
         "@N MANAGEMENT  PLANT IRRIG FERTI RESID HARVS\n" + \
         " 1 MA              R     N     D     N     M\n" + \
         "@N OUTPUTS     FNAME OVVEW SUMRY FROPT GROUT CAOUT WAOUT NIOUT MIOUT DIOUT VBOSE CHOUT OPOUT FMOPT\n" + \
-        " 1 OU              N     N     N     1     N     N     N     N     N     N     Y     N     N     A\n\n" + \
+        " 1 OU              N     Y     Y     1     N     N     N     N     N     N     Y     N     N     A\n\n" + \
         "@  AUTOMATIC MANAGEMENT\n" + \
         "@N PLANTING    PFRST PLAST PH2OL PH2OU PH2OD PSTMX PSTMN\n" + \
         " 1 PL          98155 98200    40   100    30    40    10\n" + \
@@ -363,7 +387,7 @@ class GSRun():
                 assert os.path.exists(weather_path)
                 os.symlink(weather_path, wthfile_path)
 
-        with open(f"{self.RUN_PATH}/EXPEFILE.MZX", 'w') as f:
+        with open(f"{self.RUN_PATH}/EXPEFILE.{CROP_CODES[self._crop_name]}X", 'w') as f:
             f.write(self.gsx_str)
 
         with open(f"{self.RUN_PATH}/DSSBatch.v48", 'w') as f:
@@ -381,6 +405,11 @@ class GSRun():
             [line.split() for line in out.split("\n")],
             columns="RUN  CR  TRT FLO MAT TOPWT HARWT  RAIN  TIRR   CET  PESW  TNUP  TNLF   TSON TSOC".split()
         )
+
+        with open(os.path.join(self.RUN_PATH, "OVERVIEW.OUT")) as f:
+            self.overview = f.readlines()
+        with open(os.path.join(self.RUN_PATH, "Summary.OUT")) as f:
+            self.summary = f.readlines()
         # shutil.rmtree(self.RUN_PATH)
         return df
     
