@@ -246,9 +246,10 @@ class GSRun():
         "*FIELDS\n" + \
         "@L ID_FIELD WSTA....  FLSA  FLOB  FLDT  FLDD  FLDS  FLST SLTX  SLDP  ID_SOIL    FLNAME\n" 
         for n, (weather_n, soil_n) in enumerate(self.field, 1):
+            weather_sufix = self.weather[weather_n-1][-8:-4]
             wth_id = WTH_IDS[weather_n - 1]
             self.gsx_str += \
-            "{0:-2} SEFL00{0:02} SE{1}{2}01   -99     0 DR000     0     0 00000 -99    200  IB000000{3:-02} -99\n".format(n, wth_id, yr, soil_n)
+            "{0:-2} SEFL00{0:02} SE{1}{2}   -99     0 DR000     0     0 00000 -99    200  IB000000{3:-02} -99\n".format(n, wth_id, weather_sufix, soil_n)
         self.gsx_str += "\n" 
         
     def _ic_build(self):
@@ -277,8 +278,8 @@ class GSRun():
             if isinstance(planting, (datetime, date)):
                 planting = {"PDATE": planting}
             planting["PDATE"] = planting["PDATE"].strftime("%y%j")
-            if "EDATE" in planting:
-                assert isinstance(planting["EDATE"], (date, datetime))
+            if ("EDATE" in planting) and (planting["EDATE"] != -99):
+                assert isinstance(planting["EDATE"], (date, datetime)) 
                 planting["EDATE"] = planting["EDATE"].strftime("%y%j")
             options = [
                 planting.get(key, DEFAULT_PLANTING_OPTIONS[key]) 
@@ -351,7 +352,7 @@ class GSRun():
         """
         assert len(self.treatments) > 0, \
             "No treatments have been added. Use the add_treatment to add treatments" 
-        self.start_date = kwargs.get("start_date", self.start_date + timedelta(days=150))
+        self.start_date = kwargs.get("start_date", self.start_date)
         latest_date = kwargs.get("latest_date", self.start_date + timedelta(days=150))
         sim_controls = kwargs.get("sim_controls", DEFAULT_SIMULATION_OPTIONS)
         
@@ -380,12 +381,13 @@ class GSRun():
 
         for n, weather_path in enumerate(self.weather, 1):
             wth_id = WTH_IDS[n-1]
-            for year in range(self.start_date.year, latest_date.year+1):
-                wthfile_path = f"{self.RUN_PATH}/SE{wth_id}{str(year)[2:]}01.WTH"
-                if os.path.exists(wthfile_path):
-                    os.remove(wthfile_path)
-                assert os.path.exists(weather_path)
-                os.symlink(weather_path, wthfile_path)
+            # for year in range(self.start_date.year, latest_date.year+1):
+            # weather_path = f"{weather_path[:-8]}{str(year)[2:]}01.WTH"
+            wthfile_path = f"{self.RUN_PATH}/SE{wth_id}{weather_path[-10:][2:]}"
+            if os.path.exists(wthfile_path):
+                os.remove(wthfile_path)
+            assert os.path.exists(weather_path)
+            os.symlink(weather_path, wthfile_path)
 
         with open(f"{self.RUN_PATH}/EXPEFILE.{CROP_CODES[self._crop_name]}X", 'w') as f:
             f.write(self.gsx_str)
