@@ -137,7 +137,8 @@ class GSRun():
             Path to a .SOL file. That file must contain only one soil profile.
             Soil profile string can also be passed using the soil_profile argument.
         weather: str
-            Path to a .WTH file. 
+            Path to a .WTH file. The .WTH must comply the DSSAT .WTH naming 
+            conventinon.
         nitrogen: list of tuples [(int, float), ...]
             A list of tuples where each tuple is one Nitrogen application. The 
             tuple contains two values, where the first one indicates the application
@@ -379,15 +380,28 @@ class GSRun():
         with open(f"{self.RUN_PATH}/SOIL.SOL", 'w') as f:
             f.write(self.sol_str)
 
-        for n, weather_path in enumerate(self.weather, 1):
+        # There two types of Weather files: one .WTH file with data for more than 
+        # one year, and one .WTH per year. The .WTH file naming convetion indicates
+        # if one .WTH has data for more than one year. For example, the file
+        # WSTA2101.WTH contains data for only 2021, while WSTA2102.WTH contains 
+        # data for two years starting in 2021.
+        for n, wthpath_from in enumerate(self.weather, 1):
             wth_id = WTH_IDS[n-1]
-            # for year in range(self.start_date.year, latest_date.year+1):
-            # weather_path = f"{weather_path[:-8]}{str(year)[2:]}01.WTH"
-            wthfile_path = f"{self.RUN_PATH}/SE{wth_id}{weather_path[-10:][2:]}"
-            if os.path.exists(wthfile_path):
-                os.remove(wthfile_path)
-            assert os.path.exists(weather_path)
-            os.symlink(weather_path, wthfile_path)
+            wth_len = wthpath_from[-6:-4]
+            if wth_len == "01":
+                # If multiple .WTH files
+                wth_files_range = range(self.start_date.year, latest_date.year+1)
+            else:
+                # If all data is in a single .WTH file
+                wth_files_range = range(self.start_date.year, self.start_date.year+1)
+            for year in wth_files_range:
+                year = str(year)[2:]
+                wthpath_from = f"{wthpath_from[:-8]}{year}{wth_len}.WTH"
+                wthpath_to = f"{self.RUN_PATH}/SE{wth_id}{year}{wth_len}.WTH"
+                if os.path.exists(wthpath_to):
+                    os.remove(wthpath_to)
+                assert os.path.exists(wthpath_from)
+                os.symlink(wthpath_from, wthpath_to)
 
         with open(f"{self.RUN_PATH}/EXPEFILE.{CROP_CODES[self._crop_name]}X", 'w') as f:
             f.write(self.gsx_str)
