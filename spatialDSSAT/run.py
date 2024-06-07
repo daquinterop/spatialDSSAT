@@ -43,10 +43,17 @@ for file in os.listdir(DSSAT_STATIC):
     os.symlink(os.path.join(DSSAT_STATIC, file), file_link)
 
 DEFAULT_SIMULATION_OPTIONS = {
+    # Switches
     "WATER": "Y", "NITRO": "Y", "SYMBI": "N", "PHOSP": "N", "POTAS": "N",
     "CO2": "D",
+    # Methods
     "LIGHT": "E", "EVAPO": "R", "INFIL": "S", "PHOTO": "C",  "MESOM": "P", 
     "MESEV": "R", "MESOL": "2",
+    # Irrigation
+    "IRRIG": "N", "IMDEP": 30, "ITHRL": 50, "ITHRU": 100,
+    # Planting
+    "PLANT": "R", "PFRST": "00001", "PLAST": "00365", "PH2OL": 40,
+    "PH2OU": 100, "PH2OD": 30, "PSTMX": 40, "PSTMN": 10
 }
 DEFAULT_PLANTING_OPTIONS = {
     "PDATE": -99, "EDATE": -99, "PPOP": 4.0, "PPOE": 4.0, "PLME": "S",
@@ -311,7 +318,7 @@ class GSRun():
         self.gsx_str += \
         "*SIMULATION CONTROLS\n" + \
         "@N GENERAL     NYERS NREPS START SDATE RSEED SNAME.................... SMODEL\n" + \
-        " 1 GE              1     1     P {0:<5}  2150 N SPATIAL ANALYSES TEST\n".format(
+        " 1 GE              1     1     S {0:<5}  2150 N SPATIAL ANALYSES TEST\n".format(
             self.start_date.strftime("%y%j")
         ) + \
         "@N OPTIONS     WATER NITRO SYMBI PHOSP POTAS DISES  CHEM  TILL   CO2\n" + \
@@ -319,14 +326,14 @@ class GSRun():
         "@N METHODS     WTHER INCON LIGHT EVAPO INFIL PHOTO HYDRO MESOM MESEV MESOL\n" + \
         " 1 ME              M     M     {6}     {7}     {8}     {9}     R     {10}     {11}     {12}\n".format(*options) + \
         "@N MANAGEMENT  PLANT IRRIG FERTI RESID HARVS\n" + \
-        " 1 MA              R     N     D     N     M\n" + \
+        " 1 MA              {17}     {13}     D     N     M\n".format(*options) + \
         "@N OUTPUTS     FNAME OVVEW SUMRY FROPT GROUT CAOUT WAOUT NIOUT MIOUT DIOUT VBOSE CHOUT OPOUT FMOPT\n" + \
         " 1 OU              N     Y     Y     1     N     N     N     N     N     N     Y     N     N     A\n\n" + \
         "@  AUTOMATIC MANAGEMENT\n" + \
         "@N PLANTING    PFRST PLAST PH2OL PH2OU PH2OD PSTMX PSTMN\n" + \
-        " 1 PL          98155 98200    40   100    30    40    10\n" + \
+        " 1 PL          {18} {19} {20:>5d} {21:>5d} {22:>5d} {23:>5d} {24:>5d}\n".format(*options) + \
         "@N IRRIGATION  IMDEP ITHRL ITHRU IROFF IMETH IRAMT IREFF\n" + \
-        " 1 IR             30    50   100 GS000 IR001    10     1\n" + \
+        " 1 IR          {14:>5d} {15:>5d} {16:>5d} GS000 IR003    10     1\n".format(*options) + \
         "@N NITROGEN    NMDEP NMTHR NAMNT NCODE NAOFF\n" + \
         " 1 NI             30    50    25 FE001 GS000\n" + \
         "@N RESIDUES    RIPCN RTIME RIDEP\n" + \
@@ -426,7 +433,7 @@ class GSRun():
             self.overview = f.readlines()
         with open(os.path.join(self.RUN_PATH, "Summary.OUT")) as f:
             self.summary = f.readlines()
-        # shutil.rmtree(self.RUN_PATH)
+        shutil.rmtree(self.RUN_PATH)
         return df
     
     def clear(self):
@@ -434,3 +441,19 @@ class GSRun():
         Clear treatments to define new ones
         """
         self.__init__(crop_name=self._crop_name)
+        
+        
+"""
+Lookup table for simulation options
+0   WATER   11  MESEV   22  PH2OD
+1   NITRO   12  MESOL   23  PSTMX
+2   SYMBI   13  IRRIG   24  PSTMN
+3   PHOSP   14  IMDEP   25
+4   POTAS   15  ITHRL   26
+5   CO2     16  ITHRU
+6   LIGHT   17  PLANT
+7   EVAPO   18  PFRST
+8   INFIL   19  PLAST
+9   PHOTO   20  PH2OL
+10  MESOM   21  PH2OU
+"""
