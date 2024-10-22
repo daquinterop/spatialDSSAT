@@ -328,7 +328,7 @@ class GSRun():
         "@N MANAGEMENT  PLANT IRRIG FERTI RESID HARVS\n" + \
         " 1 MA              {17}     {13}     D     N     M\n".format(*options) + \
         "@N OUTPUTS     FNAME OVVEW SUMRY FROPT GROUT CAOUT WAOUT NIOUT MIOUT DIOUT VBOSE CHOUT OPOUT FMOPT\n" + \
-        " 1 OU              N     Y     Y     1     N     N     N     N     N     N     Y     N     N     A\n\n" + \
+        " 1 OU              N     Y     Y     1     Y     N     N     N     N     N     Y     N     N     A\n\n" + \
         "@  AUTOMATIC MANAGEMENT\n" + \
         "@N PLANTING    PFRST PLAST PH2OL PH2OU PH2OD PSTMX PSTMN\n" + \
         " 1 PL          {18} {19} {20:>5d} {21:>5d} {22:>5d} {23:>5d} {24:>5d}\n".format(*options) + \
@@ -340,7 +340,7 @@ class GSRun():
         " 1 RE            100     1    20\n" + \
         "@N HARVEST     HFRST HLAST HPCNP HPCNR\n" + \
         " 1 HA              0 81365   100     0\n"
-
+        # TODO: ADD Irrigation method as an option
     def run(self, **kwargs) -> pd.DataFrame:
         """
         Run DSSAT in spatial mode. It returns a dataframe with the simulation
@@ -395,12 +395,18 @@ class GSRun():
         for n, wthpath_from in enumerate(self.weather, 1):
             wth_id = WTH_IDS[n-1]
             wth_len = wthpath_from[-6:-4]
+            start_year = int(wthpath_from[-8:-6])
+            if start_year > 50: # don't think I'll work with data before 1950
+                start_year += 1900
+            else:
+                start_year += 2000
+            start_year = min(start_year, self.start_date.year)
             if wth_len == "01":
                 # If multiple .WTH files
-                wth_files_range = range(self.start_date.year, latest_date.year+1)
+                wth_files_range = range(start_year, latest_date.year+1)
             else:
                 # If all data is in a single .WTH file
-                wth_files_range = range(self.start_date.year, self.start_date.year+1)
+                wth_files_range = range(start_year, start_year+1)
             for year in wth_files_range:
                 year = str(year)[2:]
                 wthpath_from = f"{wthpath_from[:-8]}{year}{wth_len}.WTH"
@@ -433,6 +439,8 @@ class GSRun():
             self.overview = f.readlines()
         with open(os.path.join(self.RUN_PATH, "Summary.OUT")) as f:
             self.summary = f.readlines()
+        with open(os.path.join(self.RUN_PATH, "PlantGro.OUT")) as f:
+            self.plantgro = f.readlines()
         shutil.rmtree(self.RUN_PATH)
         return df
     
