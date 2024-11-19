@@ -30,6 +30,7 @@ setuptools.setup(
         "Operating System :: OS Independent",
     ],
     package_dir={"": "."},
+    packages=["spatialDSSAT"],
     python_requires=">=3.6",
     license='MIT',
     install_requires=requirements,
