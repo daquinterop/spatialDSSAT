@@ -15,6 +15,8 @@ from netCDF4 import Dataset
 from itertools import product
 from tqdm import tqdm
 import shutil
+from typing import Union
+
 
 from DSSATTools import Weather
 
@@ -77,7 +79,7 @@ MINIMUM_VARIABLE_SET = ["TMAX", "TMIN", "SRAD", "RAIN"]
 TEMP_VARS = ["TMAX", "TMIN", "TDEW"]
 
 def weather_from_netcdf(
-        nc_file:str,  elev:str|float ,geom:Polygon, save_to:str, 
+        nc_file:str,  elev:Union[str, float] ,geom:Polygon, save_to:str, 
         pars:dict=VARIABLE_MAP_AGERA5, trans:dict=VARIABLE_TRANS_AGERA5):
     """
     Creates .WTH files for the pixels within a polygon from a AgERA5 netCDF file.
